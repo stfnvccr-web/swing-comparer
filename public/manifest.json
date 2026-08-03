@@ -1,0 +1,16 @@
+{
+  "short_name": "SwingAnalyzer",
+  "name": "Golf Swing Analyzer PRO",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "display": "standalone",
+  "orientation": "portrait"
+}

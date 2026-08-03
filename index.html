@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="it" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#09090b" />
+    <meta name="description" content="PWA Local-First per l'analisi e il confronto dello swing da golf con Dual Player e Strumenti di Disegno Overlay." />
+    <link rel="manifest" href="/manifest.json" />
+    <title>Golf Swing Analyzer PRO</title>
+  </head>
+  <body class="bg-zinc-950 text-zinc-100 min-h-screen">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch((err) => {
+            console.log('ServiceWorker registration failed: ', err);
+          });
+        });
+      }
+    </script>
+  </body>
+</html>
