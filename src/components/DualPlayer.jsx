@@ -20,6 +20,10 @@ export default function DualPlayer({
   panB = { x: 0, y: 0 },
   keypointsA,
   keypointsB,
+  setKeypointsA,
+  setKeypointsB,
+  setSyncA,
+  setSyncB,
   autoSpeedMatch,
   onUpdateTimes,
   onBindControls,
@@ -36,6 +40,7 @@ export default function DualPlayer({
   const [overlayOpacity, setOverlayOpacity] = useState(0.5);
 
   const [timeA, setTimeA] = useState(0);
+  const [timeB, setTimeB] = useState(0);
   const [durA, setDurA] = useState(0);
   const [durB, setDurB] = useState(0);
 
@@ -54,6 +59,12 @@ export default function DualPlayer({
   useEffect(() => { impactBRef.current = syncB ?? 0; }, [syncB]);
   useEffect(() => { layoutModeRef.current = layoutMode; }, [layoutMode]);
   useEffect(() => { playbackRateRef.current = playbackRate; }, [playbackRate]);
+
+  // Refs for keypoints (used inside useCallback)
+  const keypointsARef = useRef(keypointsA);
+  const keypointsBRef = useRef(keypointsB);
+  useEffect(() => { keypointsARef.current = keypointsA; }, [keypointsA]);
+  useEffect(() => { keypointsBRef.current = keypointsB; }, [keypointsB]);
 
   // Compute speed ratio and keep in ref
   const speedRatioB = useMemo(() => {
@@ -85,6 +96,19 @@ export default function DualPlayer({
         vB.currentTime = targetB;
       }
     }
+    // Auto-stop at finish keypoint or video end
+    const finishA = keypointsARef.current?.finish ?? (vA.duration || Infinity);
+    const finishB = keypointsBRef.current?.finish ?? (vB?.duration || Infinity);
+    if (vA.currentTime >= finishA || (vB && vB.currentTime >= finishB)) {
+      vA.pause();
+      vB?.pause();
+      setIsPlaying(false);
+    }
+  }, []);
+
+  const onTimeUpdateB = useCallback(() => {
+    const vB = videoRefB.current;
+    if (vB) setTimeB(vB.currentTime);
   }, []);
 
   // ——— CONTROLS ———
@@ -107,32 +131,44 @@ export default function DualPlayer({
   }, [fpsA, fpsB, onBindControls, onTimeUpdateA]);
 
   // ——— PLAY / PAUSE ———
-  const togglePlay = () => {
+  const togglePlay = async () => {
     const vA = videoRefA.current;
     const vB = videoRefB.current;
 
+    // --- SINGLE MODE ---
     if (layoutMode === 'single') {
       const v = activeSingleSlot === 'A' ? vA : vB;
-      if (!v) return;
-      if (isPlaying) { v.pause(); setIsPlaying(false); }
-      else { v.playbackRate = playbackRate; v.play().catch(() => {}); setIsPlaying(true); }
+      if (!v || !v.src) return;
+      if (isPlaying) {
+        v.pause();
+        setIsPlaying(false);
+      } else {
+        v.playbackRate = playbackRate;
+        try { await v.play(); setIsPlaying(true); } catch (e) { console.warn('Play failed:', e); }
+      }
       return;
     }
 
-    if (!vA) return;
+    // --- DUAL / OVERLAY MODE ---
+    if (!vA || !vA.src) return;
 
     if (isPlaying) {
-      vA.pause(); vB?.pause();
+      vA.pause();
+      vB?.pause();
       setIsPlaying(false);
     } else {
-      // Align B before play
-      const deltaT = vA.currentTime - impactARef.current;
-      const targetB = Math.max(0, Math.min(vB?.duration || 0, impactBRef.current + deltaT * speedRatioBRef.current));
-      if (vB) { vB.currentTime = targetB; vB.playbackRate = playbackRate * speedRatioBRef.current; }
+      // Set playback rates
       vA.playbackRate = playbackRate;
-      vA.play().catch(() => {});
-      vB?.play().catch(() => {});
-      setIsPlaying(true);
+      if (vB?.src) vB.playbackRate = playbackRate * speedRatioBRef.current;
+
+      // Start playing A, then B synced
+      try {
+        await vA.play();
+        if (vB?.src) vB.play().catch(() => {});
+        setIsPlaying(true);
+      } catch (e) {
+        console.warn('Play failed:', e);
+      }
     }
   };
 
@@ -170,6 +206,9 @@ export default function DualPlayer({
     } else if (phase === 'top') {
       tA = keypointsA?.top ?? Math.max(0, iA - 0.4);
       tB = keypointsB?.top ?? Math.max(0, iB - 0.4);
+    } else if (phase === 'finish') {
+      tA = keypointsA?.finish ?? Math.min(vA?.duration || iA + 1.5, iA + 1.5);
+      tB = keypointsB?.finish ?? Math.min(vB?.duration || iB + 1.5, iB + 1.5);
     }
 
     if (vA) { vA.currentTime = tA; setTimeA(tA); }
@@ -189,6 +228,78 @@ export default function DualPlayer({
     return () => ro.disconnect();
   }, [layoutMode, activeSingleSlot]);
 
+  // ——— INLINE KEYPOINT BAR ———
+  const KeypointBar = ({ slot, keypoints, setKeypoints, currentTime, accentColor }) => {
+    const phases = [
+      { key: 'address', label: '🏌️ Setup', color: 'amber' },
+      { key: 'top', label: '🔝 Top', color: 'sky' },
+      { key: 'impact', label: '⚡ Impatto', color: 'emerald' },
+      { key: 'finish', label: '🏁 Finish', color: 'rose' },
+    ];
+
+    const colorMap = {
+      amber: { set: 'bg-amber-500/20 text-amber-400 border-amber-500/40', label: 'text-amber-400' },
+      sky: { set: 'bg-sky-500/20 text-sky-400 border-sky-500/40', label: 'text-sky-400' },
+      emerald: { set: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40', label: 'text-emerald-400' },
+      rose: { set: 'bg-rose-500/20 text-rose-400 border-rose-500/40', label: 'text-rose-400' },
+    };
+
+    const handleMark = (phaseKey) => {
+      if (!setKeypoints) return;
+      const updated = { ...keypoints, [phaseKey]: currentTime };
+      setKeypoints(updated);
+      // Auto-set syncA/syncB when impact is marked
+      if (phaseKey === 'impact') {
+        if (slot === 'A') setSyncA?.(currentTime);
+        else setSyncB?.(currentTime);
+      }
+    };
+
+    const handleClear = (phaseKey, e) => {
+      e.stopPropagation();
+      if (!setKeypoints) return;
+      const updated = { ...keypoints, [phaseKey]: null };
+      setKeypoints(updated);
+      if (phaseKey === 'impact') {
+        if (slot === 'A') setSyncA?.(null);
+        else setSyncB?.(null);
+      }
+    };
+
+    return (
+      <div className="absolute bottom-0 left-0 right-0 z-10 flex items-center gap-1 px-2 py-1.5 bg-zinc-900/80 backdrop-blur border-t border-zinc-800">
+        {phases.map(({ key, label, color }) => {
+          const val = keypoints?.[key];
+          const isSet = val !== null && val !== undefined;
+          return (
+            <button
+              key={key}
+              onClick={() => handleMark(key)}
+              className={`flex-1 flex flex-col items-center gap-0.5 px-1 py-1 rounded-lg text-[9px] font-bold transition active:scale-95 border ${
+                isSet
+                  ? colorMap[color].set
+                  : 'bg-zinc-800/50 text-zinc-500 border-zinc-700/50 hover:text-zinc-300'
+              }`}
+            >
+              <span className="leading-none">{label}</span>
+              {isSet ? (
+                <span className="flex items-center gap-0.5">
+                  <span className="font-mono text-[8px]">{val.toFixed(2)}s</span>
+                  <span
+                    onClick={(e) => handleClear(key, e)}
+                    className="text-zinc-500 hover:text-red-400 cursor-pointer ml-0.5"
+                  >✕</span>
+                </span>
+              ) : (
+                <span className="text-[8px] text-zinc-600">tap</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
   // ——— VIDEO SLOT COMPONENT (inline to share refs) ———
   const VideoEl = ({ refEl, src, onTU, onMeta, zoom, pan, mirrored, label, accentClass }) => (
     <div className={`absolute inset-0 flex items-center justify-center`}>
@@ -197,6 +308,10 @@ export default function DualPlayer({
           ref={refEl} src={src}
           onTimeUpdate={onTU}
           onLoadedMetadata={onMeta}
+          onEnded={() => {
+            if (refEl.current) refEl.current.pause();
+            setIsPlaying(false);
+          }}
           playsInline muted
           style={{ transform: `scale(${zoom}) translate(${pan.x}px, ${pan.y}px)` }}
           className={`w-full h-full object-contain ${mirrored ? 'scale-x-[-1]' : ''}`}
@@ -230,9 +345,15 @@ export default function DualPlayer({
         {layoutMode === 'single' && (
           <div ref={containerRefA} className="relative w-full aspect-[3/4] sm:aspect-[16/9] max-h-[75vh] bg-zinc-950 overflow-hidden">
             {activeSingleSlot === 'A' ? (
-              <VideoEl refEl={videoRefA} src={videoA} onTU={onTimeUpdateA} onMeta={(e) => setDurA(e.target.duration)} zoom={zoomA} pan={panA} mirrored={mirroredA} label="A · UTENTE" accentClass="bg-emerald-500 text-zinc-950" />
+              <>
+                <VideoEl refEl={videoRefA} src={videoA} onTU={onTimeUpdateA} onMeta={(e) => setDurA(e.target.duration)} zoom={zoomA} pan={panA} mirrored={mirroredA} label="A · UTENTE" accentClass="bg-emerald-500 text-zinc-950" />
+                <KeypointBar slot="A" keypoints={keypointsA} setKeypoints={setKeypointsA} currentTime={timeA} accentColor="emerald" />
+              </>
             ) : (
-              <VideoEl refEl={videoRefB} src={videoB} onTU={() => {}} onMeta={(e) => setDurB(e.target.duration)} zoom={zoomB} pan={panB} mirrored={mirroredB} label="B · PRO" accentClass="bg-sky-500 text-zinc-950" />
+              <>
+                <VideoEl refEl={videoRefB} src={videoB} onTU={onTimeUpdateB} onMeta={(e) => setDurB(e.target.duration)} zoom={zoomB} pan={panB} mirrored={mirroredB} label="B · PRO" accentClass="bg-sky-500 text-zinc-950" />
+                <KeypointBar slot="B" keypoints={keypointsB} setKeypoints={setKeypointsB} currentTime={timeB} accentColor="sky" />
+              </>
             )}
             <CanvasOverlay width={dimA.width} height={dimA.height} />
           </div>
@@ -244,10 +365,12 @@ export default function DualPlayer({
             <div ref={containerRefA} className="relative aspect-[3/4] sm:aspect-[4/3] bg-zinc-950 overflow-hidden">
               <VideoEl refEl={videoRefA} src={videoA} onTU={onTimeUpdateA} onMeta={(e) => setDurA(e.target.duration)} zoom={zoomA} pan={panA} mirrored={mirroredA} label="A · UTENTE" accentClass="bg-emerald-500 text-zinc-950" />
               <CanvasOverlay width={dimA.width} height={dimA.height} />
+              <KeypointBar slot="A" keypoints={keypointsA} setKeypoints={setKeypointsA} currentTime={timeA} accentColor="emerald" />
             </div>
             <div ref={containerRefB} className="relative aspect-[3/4] sm:aspect-[4/3] bg-zinc-950 overflow-hidden">
-              <VideoEl refEl={videoRefB} src={videoB} onTU={() => {}} onMeta={(e) => setDurB(e.target.duration)} zoom={zoomB} pan={panB} mirrored={mirroredB} label="B · PRO" accentClass="bg-sky-500 text-zinc-950" />
+              <VideoEl refEl={videoRefB} src={videoB} onTU={onTimeUpdateB} onMeta={(e) => setDurB(e.target.duration)} zoom={zoomB} pan={panB} mirrored={mirroredB} label="B · PRO" accentClass="bg-sky-500 text-zinc-950" />
               <CanvasOverlay width={dimB.width} height={dimB.height} />
+              <KeypointBar slot="B" keypoints={keypointsB} setKeypoints={setKeypointsB} currentTime={timeB} accentColor="sky" />
             </div>
           </div>
         )}
@@ -296,6 +419,7 @@ export default function DualPlayer({
               <button onClick={() => handleSnapPhase('address')} className="px-2.5 py-1 text-[11px] font-bold rounded-xl bg-zinc-800 text-amber-300 border border-amber-500/30">🏌️ Setup</button>
               <button onClick={() => handleSnapPhase('top')} className="px-2.5 py-1 text-[11px] font-bold rounded-xl bg-zinc-800 text-sky-300 border border-sky-500/30">🔝 Top</button>
               <button onClick={() => handleSnapPhase('impact')} className="px-2.5 py-1 text-[11px] font-bold rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">⚡ Impatto</button>
+              <button onClick={() => handleSnapPhase('finish')} className="px-2.5 py-1 text-[11px] font-bold rounded-xl bg-zinc-800 text-rose-300 border border-rose-500/30">🏁 Finish</button>
             </div>
           )}
         </div>

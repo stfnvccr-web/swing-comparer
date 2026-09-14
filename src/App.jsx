@@ -26,8 +26,8 @@ export default function App() {
   const [panA, setPanA] = useState({ x: 0, y: 0 });
   const [panB, setPanB] = useState({ x: 0, y: 0 });
 
-  const [keypointsA, setKeypointsA] = useState({ address: null, top: null, impact: null });
-  const [keypointsB, setKeypointsB] = useState({ address: null, top: null, impact: null });
+  const [keypointsA, setKeypointsA] = useState({ address: null, top: null, impact: null, finish: null });
+  const [keypointsB, setKeypointsB] = useState({ address: null, top: null, impact: null, finish: null });
 
   const [activeWizardSlot, setActiveWizardSlot] = useState(null);
   const playerControlsRef = useRef(null);
@@ -192,6 +192,8 @@ export default function App() {
           setPanB={setPanB}
           keypointsA={keypointsA}
           keypointsB={keypointsB}
+          setKeypointsA={setKeypointsA}
+          setKeypointsB={setKeypointsB}
           autoSpeedMatch={true}
           onUpdateTimes={handleUpdateTimes}
           onBindControls={(c) => { playerControlsRef.current = c; }}
